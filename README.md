@@ -84,7 +84,7 @@ dist-share/CodexQuotaBar.zip
 
 ## 安装
 
-将 `CodexQuotaBar.app` 拖入系统 `/Applications` 文件夹后运行。
+从 [Releases](https://github.com/IsaacSu95/codex-quota-bar/releases/latest) 下载 `CodexQuotaBar.zip`，解压后将 `CodexQuotaBar.app` 拖入系统 `/Applications` 文件夹并运行。
 
 当前构建使用 ad-hoc 签名，没有 Apple Developer ID 公证。如果 macOS 阻止首次打开：
 
