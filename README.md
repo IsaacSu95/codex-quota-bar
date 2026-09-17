@@ -4,6 +4,16 @@
 
 Codex Quota Bar is an unofficial macOS menu bar utility for viewing remaining Codex quota and local daily model activity.
 
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/menu-bar-preview.png" width="85" alt="Codex Quota Bar 菜单栏额度与重置倒计时">
+</p>
+
+<p align="center">
+  <img src="docs/images/popover-preview.png" width="378" alt="Codex Quota Bar 展开面板">
+</p>
+
 > [!IMPORTANT]
 > 这是非官方社区项目，与 OpenAI 没有关联或背书。Codex 和 OpenAI 是其各自权利人的商标。
 
