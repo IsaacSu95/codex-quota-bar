@@ -8,9 +8,10 @@ APP="$ROOT/dist-share/CodexQuotaBar.app"
 mkdir -p "$ROOT/.build/release" "$ROOT/dist-share"
 
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/codex-quota-bar-clang-cache}" \
-swiftc "$ROOT/Sources/CodexMeter/main.swift" \
+swiftc "$ROOT"/Sources/CodexMeter/*.swift \
   -o "$BUILD_BIN" \
-  -framework AppKit
+  -framework AppKit \
+  -framework Network
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

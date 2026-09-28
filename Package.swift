@@ -10,6 +10,11 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "CodexMeter"
+        ),
+        .testTarget(
+            name: "CodexMeterTests",
+            dependencies: ["CodexMeter"]
         )
-    ]
+    ],
+    swiftLanguageModes: [.v5]
 )
