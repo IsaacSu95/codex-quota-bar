@@ -178,6 +178,8 @@ enum RelayConfigurationError: LocalizedError {
     case unreadableConfig
     case staleBackup
     case missingBackup
+    case unsafeConfig
+    case configChanged
 
     var errorDescription: String? {
         switch self {
@@ -187,6 +189,10 @@ enum RelayConfigurationError: LocalizedError {
             return "检测到未完成的旧备份，请先恢复配置"
         case .missingBackup:
             return "没有找到可恢复的配置备份"
+        case .unsafeConfig:
+            return "配置格式无法安全局部恢复，当前配置及备份已保留，请手动检查 openai_base_url"
+        case .configChanged:
+            return "配置在恢复期间发生变化，备份已保留，请重试"
         }
     }
 }
@@ -262,14 +268,86 @@ final class RelayConfigurationManager {
             throw RelayConfigurationError.missingBackup
         }
 
-        if metadata.configExisted {
-            try backup.write(to: configURL, options: .atomic)
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
-        } else if fileManager.fileExists(atPath: configURL.path) {
-            try fileManager.removeItem(at: configURL)
+        if fileManager.fileExists(atPath: configURL.path) {
+            let current = try Data(contentsOf: configURL)
+            guard let originalText = String(data: backup, encoding: .utf8),
+                  let currentText = String(data: current, encoding: .utf8) else {
+                throw RelayConfigurationError.unreadableConfig
+            }
+            // Reconstruct the applied file so backups from older releases remain usable.
+            let applied = replacingTopLevelValue(for: "openai_base_url", with: Self.relayBaseURL, in: originalText)
+            let restored: Data?
+            if current == Data(applied.utf8) {
+                restored = metadata.configExisted ? backup : nil
+            } else {
+                var lines = currentText.components(separatedBy: "\n")
+                if let index = try restorableBaseLine(in: currentText),
+                   topLevelValue(for: "openai_base_url", in: lines[index]) == Self.relayBaseURL {
+                    if let originalIndex = try restorableBaseLine(in: originalText) {
+                        lines[index] = originalText.components(separatedBy: "\n")[originalIndex]
+                    } else {
+                        lines.remove(at: index)
+                    }
+                }
+                restored = Data(lines.joined(separator: "\n").utf8)
+            }
+            guard try Data(contentsOf: configURL) == current else {
+                throw RelayConfigurationError.configChanged
+            }
+            if let restored {
+                if restored != current {
+                    try restored.write(to: configURL, options: .atomic)
+                    try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+                }
+            } else {
+                try fileManager.removeItem(at: configURL)
+            }
         }
         try? fileManager.removeItem(at: backupURL)
         try? fileManager.removeItem(at: metadataURL)
+    }
+
+    // This editor only handles unambiguous single-line top-level values. Refuse
+    // multiline roots rather than mistaking text inside them for a setting.
+    private func restorableBaseLine(in text: String) throws -> Int? {
+        var found: Int?
+        for (index, line) in text.components(separatedBy: "\n").enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if trimmed.hasPrefix("[") { break }
+            guard let equal = trimmed.firstIndex(of: "="),
+                  !trimmed.contains("\"\"\""), !trimmed.contains("'''") else {
+                throw RelayConfigurationError.unsafeConfig
+            }
+            var quote: Character?
+            var escaped = false
+            var depth = 0
+            for char in trimmed[trimmed.index(after: equal)...] {
+                if escaped { escaped = false; continue }
+                if let active = quote {
+                    if active == "\"" && char == "\\" { escaped = true }
+                    else if char == active { quote = nil }
+                } else if char == "#" {
+                    break
+                } else if char == "\"" || char == "'" {
+                    quote = char
+                } else if char == "[" || char == "{" {
+                    depth += 1
+                } else if char == "]" || char == "}" {
+                    depth -= 1
+                }
+            }
+            guard quote == nil, depth == 0 else { throw RelayConfigurationError.unsafeConfig }
+            let key = trimmed[..<equal].trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            if key == "openai_base_url" {
+                guard found == nil else { throw RelayConfigurationError.unsafeConfig }
+                // Older versions only wrote bare keys; do not silently abandon a quoted one.
+                guard topLevelKey(in: trimmed) == key else { throw RelayConfigurationError.unsafeConfig }
+                found = index
+            }
+        }
+        return found
     }
 
     private func writeConfig(_ text: String) throws {
@@ -304,14 +382,27 @@ final class RelayConfigurationManager {
 
     private func topLevelValue(for key: String, in text: String) -> String? {
         for line in text.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasPrefix("[") { return nil }
             guard topLevelKey(in: trimmed) == key,
                   let equal = trimmed.firstIndex(of: "=") else { continue }
             let raw = trimmed[trimmed.index(after: equal)...]
-                .split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
-                .trimmingCharacters(in: .whitespaces)
-            return raw.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let quote = raw.first, quote == "\"" || quote == "'" else { return nil }
+            var escaped = false
+            for index in raw.indices.dropFirst() {
+                let char = raw[index]
+                if escaped { escaped = false; continue }
+                if quote == "\"" && char == "\\" { escaped = true; continue }
+                if char == quote {
+                    let suffix = raw[raw.index(after: index)...].trimmingCharacters(in: .whitespaces)
+                    guard suffix.isEmpty || suffix.hasPrefix("#") else { return nil }
+                    let literal = String(raw[...index])
+                    if quote == "'" { return String(literal.dropFirst().dropLast()) }
+                    return try? JSONDecoder().decode(String.self, from: Data(literal.utf8))
+                }
+            }
+            return nil
         }
         return nil
     }

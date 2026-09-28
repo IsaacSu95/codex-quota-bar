@@ -54,6 +54,140 @@ struct RelayConfigurationManagerTests {
         try fixture.manager.restore()
         #expect(!FileManager.default.fileExists(atPath: fixture.configURL.path))
     }
+
+    @Test func restorePreservesSettingsAddedDuringRelay() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.writeConfig("model = \"original\"\n")
+        try fixture.manager.enable()
+        let additions = "\n[projects.\"/tmp/new-project\"]\ntrust_level = \"trusted\"\n\n[mcp_servers.local]\ncommand = \"local-server\"\n"
+        let edited = try fixture.readConfig().replacingOccurrences(of: "\"original\"", with: "\"changed\"") + additions
+        try fixture.writeConfig(edited)
+
+        try fixture.manager.restore()
+
+        #expect(try fixture.readConfig() == "model = \"changed\"\n" + additions)
+        #expect(!fixture.manager.hasBackup)
+    }
+
+    @Test func restoreExistingURLPreservesNewSettingsAndOriginalURLComment() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let original = "openai_base_url = 'https://example.test/v1#fragment' # original\nmodel = \"original\"\n"
+        try fixture.writeConfig(original)
+        try fixture.manager.enable()
+        try fixture.writeConfig(fixture.readConfig().replacingOccurrences(of: "\"original\"", with: "\"changed\""))
+
+        try fixture.manager.restore()
+
+        #expect(try fixture.readConfig() == original.replacingOccurrences(of: "\"original\"", with: "\"changed\""))
+    }
+
+    @Test func restoreKeepsConfigCreatedAndExtendedDuringRelay() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.manager.enable()
+        try fixture.writeConfig(fixture.readConfig() + "\n[features]\nmemories = true\n")
+
+        try fixture.manager.restore()
+
+        #expect(try fixture.readConfig() == "\n[features]\nmemories = true\n")
+    }
+
+    @Test func restoreDoesNotOverwriteUserChangedURL() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.writeConfig("model = \"original\"\n")
+        try fixture.manager.enable()
+        let edited = try fixture.readConfig().replacingOccurrences(of: RelayConfigurationManager.relayBaseURL, with: "https://user-selected.test/v1")
+        try fixture.writeConfig(edited)
+
+        try fixture.manager.restore()
+
+        #expect(try fixture.readConfig() == edited)
+        #expect(!fixture.manager.hasBackup)
+    }
+
+    @Test func restoreDoesNotRecreateDeletedConfig() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.writeConfig("model = \"original\"\n")
+        try fixture.manager.enable()
+        try FileManager.default.removeItem(at: fixture.configURL)
+
+        try fixture.manager.restore()
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.configURL.path))
+        #expect(!fixture.manager.hasBackup)
+    }
+
+    @Test func restoreDoesNotMistakeURLFragmentForComment() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.writeConfig("model = \"original\"\n")
+        try fixture.manager.enable()
+        let edited = try fixture.readConfig().replacingOccurrences(of: RelayConfigurationManager.relayBaseURL, with: RelayConfigurationManager.relayBaseURL + "#user-change")
+        try fixture.writeConfig(edited)
+
+        try fixture.manager.restore()
+
+        #expect(try fixture.readConfig() == edited)
+        #expect(!fixture.manager.hasBackup)
+    }
+
+    @Test func restorePreservesCRLFAndNestedBaseURL() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.writeConfig("model = \"original\"\r\n")
+        try fixture.manager.enable()
+        let addition = "[profiles.custom]\r\nopenai_base_url = \"https://nested.test/v1\"\r\n"
+        try fixture.writeConfig(fixture.readConfig() + "\n" + addition)
+
+        try fixture.manager.restore()
+
+        #expect(try fixture.readConfig() == "model = \"original\"\r\n\n" + addition)
+    }
+
+    @Test func restoreHandlesCurrentConfigConvertedToCRLF() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.writeConfig("model = \"original\"\n")
+        try fixture.manager.enable()
+        let edited = (try fixture.readConfig() + "\n[features]\nmemories = true\n")
+            .replacingOccurrences(of: "\n", with: "\r\n")
+        try fixture.writeConfig(edited)
+
+        try fixture.manager.restore()
+
+        #expect(try fixture.readConfig() == "model = \"original\"\r\n\r\n[features]\r\nmemories = true\r\n")
+    }
+
+    @Test func restorePreservesManuallyRemovedBaseURL() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.writeConfig("openai_base_url = \"https://original.test/v1\"\n")
+        try fixture.manager.enable()
+        let edited = "model = \"changed\"\n[features]\nmemories = true\n"
+        try fixture.writeConfig(edited)
+
+        try fixture.manager.restore()
+
+        #expect(try fixture.readConfig() == edited)
+        #expect(!fixture.manager.hasBackup)
+    }
+
+    @Test func restoreRejectsAmbiguousConfigAndKeepsBackup() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.writeConfig("model = \"original\"\n")
+        try fixture.manager.enable()
+        let edited = "instructions = \"\"\"\n" + (try fixture.readConfig()) + "\"\"\"\n"
+        try fixture.writeConfig(edited)
+
+        #expect(throws: (any Error).self) { try fixture.manager.restore() }
+        #expect(try fixture.readConfig() == edited)
+        #expect(fixture.manager.hasBackup)
+    }
 }
 
 struct RelayObservationStoreTests {
